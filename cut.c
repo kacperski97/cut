@@ -1,44 +1,17 @@
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <signal.h>
-#include <unistd.h>
-#include <time.h>
-
-#define BUFF_SIZE 1024
-#define SMALL_BUFF_SIZE 64
-#define CPU_FIELDS 9
-#define NUMBER_OF_FUNCTIONS 5
-
-struct listElement{
-	char* message;
-	struct listElement *next;
-};
-
-void *readData(void*);
-void *analyzeData(void*);
-void *printData(void*);
-void *watchdog(void*);
-void *logData(void*);
-
-void signalHandler(int);
-void addElementToList(char *message);
-char *removeElementFromList(void);
-_Bool isEmptyList(void);
+#include "cut.h"
 
 _Bool activityFlags[NUMBER_OF_FUNCTIONS];
 _Bool terminationFlag;
-struct listElement *head = NULL;
+struct listElement *head;
+
+char **rawData;
+unsigned int **analyzedData;
 
 pthread_mutex_t lockRawData = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t lockAnalyzedData = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t lockLog = PTHREAD_MUTEX_INITIALIZER;
 
 int coresAmount = 0;
-
-char **rawData;
-unsigned int **analyzedData;
 
 int main(){
 	int i;
@@ -50,7 +23,7 @@ int main(){
 	for(i = 0; i < NUMBER_OF_FUNCTIONS; i++) {
 		activityFlags[i] = 0;
 	}
-
+	//Getting every like of output starting with cpu - it allows us to calculate amount of processor cores.
 	f = popen("cat /proc/stat | grep \'cpu\'", "r");
 	if (f == NULL) {
 		printf("Failed to run command\n" );
@@ -61,6 +34,8 @@ int main(){
 		coresAmount += 1;
 	}
 	
+
+	//allocating required data
 	rawData = malloc((unsigned long)coresAmount * sizeof(char*));
 	analyzedData = malloc((unsigned long)coresAmount * sizeof(int*));
 	
@@ -69,10 +44,11 @@ int main(){
 		analyzedData[i] = malloc((CPU_FIELDS - 1) * sizeof(int));
 	}
 
-	printf("%d, %s\n", coresAmount, "cat /proc/stat | grep \'cpu\'");
+	//printf("%d, %s\n", coresAmount, "cat /proc/stat | grep \'cpu\'");
  	pclose(f);
 	
-    signal(SIGTERM, *signalHandler);
+	//SIGINT added for debugging purposes
+    //signal(SIGTERM, *signalHandler);
 	signal(SIGINT, *signalHandler);
 
     pthread_t r, a, p, w, l;
@@ -88,6 +64,9 @@ int main(){
 	pthread_join(w, NULL);
 	pthread_join(l, NULL);
 
+	//Code bellow will execute when we will escape all threads
+
+	//Freeing allocated memory
 	for(i = 0; i < coresAmount; i++) {
 		free(rawData[i]);
 		free(analyzedData[i]);
@@ -112,11 +91,15 @@ int main(){
     exit(0);
 }
 
+//Function reads data in /proc/stat and saves it to rawData every second
 void *readData(){
 	int i;	
 	FILE *f;
 	
     for(;;){
+
+		//Thread will end if terminationFlag is set
+
 		if(terminationFlag){
 			pthread_exit(NULL);
 		}
@@ -128,9 +111,12 @@ void *readData(){
 			exit(1);
 		}
 		
+		//using mutex to synchronize access to rawData array
+
 		pthread_mutex_lock(&lockRawData);
 		
 		for(i = 0; i < coresAmount; i++) {
+			//reallocating memory
 			free(rawData[i]);
 			rawData[i] = malloc(SMALL_BUFF_SIZE * sizeof(char));
 			fgets(rawData[i], SMALL_BUFF_SIZE * sizeof(char), f);
@@ -150,10 +136,20 @@ void *readData(){
     }
 }
 
+//Function analyzes data from rawData and compares it to the previous scores
 void *analyzeData(){
 	int i, j;
-	unsigned int oldData[coresAmount][CPU_FIELDS - 1];
+
+	//using oldData array to store old statistics
+
+	unsigned int **oldData;
+
+	oldData = malloc((unsigned long)coresAmount * sizeof(int*));
 	
+	for(i = 0; i < coresAmount; i++) {
+		oldData[i] = malloc((CPU_FIELDS - 1) * sizeof(int));
+	}
+
 	for(i = 0; i < coresAmount; i++){
 		for(j = 0; j < CPU_FIELDS - 1; j++){
 			oldData[i][j] = 0;
@@ -161,7 +157,14 @@ void *analyzeData(){
 	}
 	
     for(;;){
+
+		//before exiting thread we have to free memeory allocated by oldData
 		if(terminationFlag){
+			for(i = 0; i < coresAmount; i++) {
+				free(oldData[i]);
+			}
+			free(oldData);
+			
 			pthread_exit(NULL);
 		}
 
@@ -198,6 +201,7 @@ void *analyzeData(){
     }
 }
 
+//Function prints analyzed data according to formula
 void *printData(){
 	int i;
 	unsigned int nonIdled, idled, totald;
@@ -209,8 +213,11 @@ void *printData(){
 			pthread_exit(NULL);
 		}
 
+
+		//cpu is separated from threads for the purpose of better displaying.
+
 		activityFlags[2] = 1;
-		//system("clear");
+		system("clear");
 		pthread_mutex_lock(&lockAnalyzedData);
 		nonIdled = analyzedData[0][0] + analyzedData[0][1] + analyzedData[0][2] + analyzedData[0][5] + analyzedData[0][6] + analyzedData[0][7];
 		idled = analyzedData[0][3] + analyzedData[0][4];
@@ -247,9 +254,12 @@ void *printData(){
     }
 }
 
+
+//function stops program if any of other functions fail to be active in a spann of 2 seconds
 void *watchdog(){
 	int i;
 
+	//watchdog is turned on with 4 seconds delay so that display can start printing without program terminating prematurely
 	sleep(4);
 
 	for(;;){
@@ -281,6 +291,8 @@ void *watchdog(){
 	}
 }
 
+
+//function stores logs in file log.txt
 void *logData(){
 	int i = 0;
 	FILE *f = fopen("log.txt", "w");
@@ -318,10 +330,14 @@ void *logData(){
 	}
 }
 
+//function sets the terminationFlag
+
 void signalHandler(int a) {
 	a = 1;
-	terminationFlag = 1;
+	terminationFlag = a;
 }
+
+//function adds an element at the end of the list - implementing FIFO queue
 
 void addElementToList(char *message){
 	if(head == NULL){
@@ -343,6 +359,8 @@ void addElementToList(char *message){
 	}
 }
 
+//function removes an element from the beginning of the list - implementing FIFO queue
+
 char *removeElementFromList(){
 	char *c = head->message;
 
@@ -352,6 +370,8 @@ char *removeElementFromList(){
 	
 	return c;
 }
+
+//function checks if list / queue is empty
 
 _Bool isEmptyList(){
 	if(head == NULL){
