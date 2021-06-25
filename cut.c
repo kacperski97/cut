@@ -47,8 +47,8 @@ int main(){
 	//printf("%d, %s\n", coresAmount, "cat /proc/stat | grep \'cpu\'");
  	pclose(f);
 	
-	//SIGINT added for debugging purposes
-    //signal(SIGTERM, *signalHandler);
+	//SIGINT added for debugging purpose
+	signal(SIGTERM, *signalHandler);
 	signal(SIGINT, *signalHandler);
 
     pthread_t r, a, p, w, l;
