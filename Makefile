@@ -7,7 +7,7 @@ CLANGWARN = -Weverything
 cut.o: cut.c cut.h
 ifeq ($(CC), gcc)
 	$(CC) cut.c $(CFLAGS) $(GCCWARN) -o cut.o
-else ifeq ($(CC), gcc)
+else ifeq ($(CC), clang)
 	$(CC) cut.c $(CFLAGS) $(CLANGWARN) -o cut.o
 endif
 
